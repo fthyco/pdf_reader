@@ -245,6 +245,10 @@ async function processPDFSource(source, title) {
     // Clean up excessive blank lines
     md = md.replace(/\n{3,}/g, '\n\n').trim();
 
+    // Normalize LaTeX: merge fragments, fix Greek, clean matrix placeholders
+    md = normalizeLatexOutput(md);
+
+
     showProgress('Complete!', 100);
     await new Promise(r => setTimeout(r, 300));
 

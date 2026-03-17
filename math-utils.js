@@ -437,8 +437,8 @@ function remapMathGlyphs(text, fontName) {
           continue;
         }
       }
-      // Replace unknown PUA with placeholder
-      result += '□';
+      // Replace unknown PUA with LaTeX-friendly placeholder
+      result += '\\square ';
       wasMapped = true;
       continue;
     }
@@ -560,8 +560,66 @@ function detectScripts(items) {
 // ─── Line Math Formatting ───────────────────────────────────────
 
 /**
+ * Check if a text item should be treated as math because it contains
+ * Unicode Greek letters or math symbols (even if its font isn't flagged).
+ * @param {Object} item — text item
+ * @returns {boolean}
+ */
+function shouldTreatAsMath(item) {
+  if (item.isMathFont || item.isSuperscript || item.isSubscript) return true;
+  // Check if text contains any Unicode chars that have LaTeX equivalents
+  if (!item.text) return false;
+  for (const ch of item.text) {
+    if (UNICODE_TO_LATEX[ch]) return true;
+  }
+  return false;
+}
+
+/**
+ * Look ahead/behind to see if a Unicode-Greek item is adjacent to a
+ * subscript or superscript, meaning it should be absorbed into the
+ * same math span.
+ * @param {Array} items — all items in the line
+ * @param {number} idx — current index
+ * @returns {boolean}
+ */
+function isAdjacentToScript(items, idx) {
+  // Check next item
+  if (idx + 1 < items.length) {
+    const next = items[idx + 1];
+    if (next.isSuperscript || next.isSubscript) return true;
+  }
+  // Check previous item
+  if (idx > 0) {
+    const prev = items[idx - 1];
+    if (prev.isSuperscript || prev.isSubscript) return true;
+  }
+  return false;
+}
+
+/**
+ * Convert a text string to LaTeX, replacing all known Unicode symbols
+ * with their LaTeX commands.
+ * @param {string} text
+ * @returns {string}
+ */
+function unicodeToLatex(text) {
+  let result = '';
+  for (const ch of text) {
+    if (UNICODE_TO_LATEX[ch]) {
+      result += UNICODE_TO_LATEX[ch] + ' ';
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+}
+
+/**
  * Format a line's items into text with LaTeX math notation.
  * Wraps math-font spans in $...$ and converts super/subscripts.
+ * Absorbs adjacent Unicode Greek/math symbols into the same $...$ block
+ * as their subscripts/superscripts so we get $\beta_{j}$ not β$_{j}$.
  * @param {Array} items — items with isMathFont, isSuperscript, isSubscript flags
  * @returns {string} — formatted text
  */
@@ -576,7 +634,10 @@ function formatMathLine(items) {
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     const text = item.text;
-    const isMath = item.isMathFont || item.isSuperscript || item.isSubscript;
+
+    // Decide if this item is math: either flagged, has Unicode math chars,
+    // or contains Greek letters adjacent to a sub/superscript
+    const isMath = shouldTreatAsMath(item) || isAdjacentToScript(items, i);
 
     if (isMath && !inMath) {
       // Entering math mode
@@ -587,20 +648,11 @@ function formatMathLine(items) {
     if (isMath) {
       // Build math content
       if (item.isSuperscript) {
-        mathBuffer += '^{' + text + '}';
+        mathBuffer += '^{' + unicodeToLatex(text).trim() + '}';
       } else if (item.isSubscript) {
-        mathBuffer += '_{' + text + '}';
+        mathBuffer += '_{' + unicodeToLatex(text).trim() + '}';
       } else {
-        // Convert Unicode math symbols to LaTeX commands
-        let latexText = '';
-        for (const ch of text) {
-          if (UNICODE_TO_LATEX[ch]) {
-            latexText += UNICODE_TO_LATEX[ch] + ' ';
-          } else {
-            latexText += ch;
-          }
-        }
-        mathBuffer += latexText;
+        mathBuffer += unicodeToLatex(text);
       }
     }
 

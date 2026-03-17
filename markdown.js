@@ -236,24 +236,112 @@ function generateMarkdown(processedPages) {
 }
 
 /**
+ * Unicode Greek to LaTeX mapping (duplicated here for self-contained use).
+ */
+const GREEK_TO_LATEX = {
+  'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
+  'ε': '\\epsilon', 'ζ': '\\zeta', 'η': '\\eta', 'θ': '\\theta',
+  'ι': '\\iota', 'κ': '\\kappa', 'λ': '\\lambda', 'μ': '\\mu',
+  'ν': '\\nu', 'ξ': '\\xi', 'π': '\\pi', 'ρ': '\\rho',
+  'σ': '\\sigma', 'τ': '\\tau', 'υ': '\\upsilon', 'φ': '\\phi',
+  'χ': '\\chi', 'ψ': '\\psi', 'ω': '\\omega',
+  'Γ': '\\Gamma', 'Δ': '\\Delta', 'Θ': '\\Theta', 'Λ': '\\Lambda',
+  'Ξ': '\\Xi', 'Π': '\\Pi', 'Σ': '\\Sigma', 'Υ': '\\Upsilon',
+  'Φ': '\\Phi', 'Ψ': '\\Psi', 'Ω': '\\Omega',
+};
+
+/**
+ * Replace Unicode Greek letters in a string with LaTeX commands.
+ * @param {string} str
+ * @returns {string}
+ */
+function greekToLatex(str) {
+  let result = '';
+  for (const ch of str) {
+    if (GREEK_TO_LATEX[ch]) {
+      result += GREEK_TO_LATEX[ch] + ' ';
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+}
+
+/**
  * Ensure math expressions have proper $ delimiters.
- * Scans text for sequences of math symbols not already inside $...$ and wraps them.
+ * Fixes hybrid patterns like β$_{j}$ → $\beta_{j}$
+ * and wraps bare math Unicode sequences.
  * @param {string} text
  * @returns {string}
  */
 function ensureMathDelimiters(text) {
-  // If already has $ delimiters, leave it alone
-  if (/\$[^$]+\$/.test(text)) return text;
+  let result = text;
 
-  // Pattern: sequences containing Greek/math symbols possibly mixed with
-  // Latin letters, digits, and math operators that look like expressions.
-  // This regex finds sequences with at least one math Unicode character.
-  const mathExprPattern = /([α-ωΑ-Ω∑∏∫∂∇∞±×÷·≤≥≠≈≡∈∉⊂⊃⊆⊇∪∩∧∨∀∃¬→←↔⇒⇐⇔⊕⊗√∝≺≻≼≽∼≃≪≫⌊⌋⌈⌉⟨⟩−][\w\s^_{},+\-=<>().*αβγδεζηθικλμνξπρσςτυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ∑∏∫∂∇∞±×÷·≤≥≠≈≡∈∉⊂⊃⊆⊇∪∩∧∨∀∃¬→←↔⇒⇐⇔⊕⊗√∝]*)/g;
+  // Fix 1: Hybrid pattern — Unicode Greek char(s) immediately before $_{...}$ or $^{...}$
+  // e.g. β$_{j}$ → $\beta_{j}$, β$_{2}$ x$_{2}$ → $\beta_{2}$ $x_{2}$
+  result = result.replace(
+    /([α-ωΑ-Ω]+)\$([_^]\{[^}]*\})\$/g,
+    (match, greek, script) => {
+      return '$' + greekToLatex(greek).trim() + script + '$';
+    }
+  );
 
-  return text.replace(mathExprPattern, (match) => {
-    // Don't wrap if it's already inside $ delimiters
-    return '$' + match.trim() + '$';
+  // Fix 2: Merge adjacent $...$ blocks with no text between them
+  // e.g. $\beta$ $_{j}$ → $\beta_{j}$
+  result = result.replace(
+    /\$([^$]+)\$\s*\$([_^]\{[^}]*\})\$/g,
+    (match, left, script) => {
+      return '$' + left.trim() + script + '$';
+    }
+  );
+
+  // Fix 3: If no $ delimiters at all, wrap bare math expressions
+  if (!/\$[^$]+\$/.test(result)) {
+    const mathExprPattern = /([α-ωΑ-Ω∑∏∫∂∇∞±×÷·≤≥≠≈≡∈∉⊂⊃⊆⊇∪∩∧∨∀∃¬→←↔⇒⇐⇔⊕⊗√∝≺≻≼≽∼≃≪≫⌊⌋⌈⌉⟨⟩−][\w\s^_{},+\-=<>().*α-ωΑ-Ω∑∏∫∂∇∞±×÷·≤≥≠≈≡∈∉⊂⊃⊆⊇∪∩∧∨∀∃¬→←↔⇒⇐⇔⊕⊗√∝]*)/g;
+
+    result = result.replace(mathExprPattern, (match) => {
+      return '$' + greekToLatex(match).trim() + '$';
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Post-process final Markdown to normalize LaTeX output.
+ * - Merges adjacent $...$ blocks
+ * - Converts remaining Unicode Greek inside $...$ to LaTeX commands
+ * - Replaces □ / \square sequences with <!-- matrix omitted -->
+ * @param {string} markdown
+ * @returns {string}
+ */
+function normalizeLatexOutput(markdown) {
+  let result = markdown;
+
+  // 1. Convert Unicode Greek inside existing $...$ to LaTeX commands
+  result = result.replace(/\$([^$]+)\$/g, (match, inner) => {
+    let converted = greekToLatex(inner);
+    return '$' + converted.trim() + '$';
   });
+
+  // 2. Merge adjacent $...$ $...$ where second starts with _ or ^
+  // Repeat to handle chains like $a$ $_{1}$ $^{2}$
+  let prev = '';
+  while (prev !== result) {
+    prev = result;
+    result = result.replace(
+      /\$([^$]+)\$\s*\$([_^]\{[^}]*\})\$/g,
+      (m, left, script) => '$' + left.trim() + script + '$'
+    );
+  }
+
+  // 3. Replace sequences of □ or \square with a meaningful marker
+  result = result.replace(/(?:□\s*){2,}/g, '<!-- matrix omitted -->');
+  result = result.replace(/(?:\\square\s*){2,}/g, '<!-- matrix omitted -->');
+  // Single □ inside $...$ → $\square$
+  result = result.replace(/□/g, '$\\square$');
+
+  return result;
 }
 
 // ─── Chunking ───────────────────────────────────────────────────
